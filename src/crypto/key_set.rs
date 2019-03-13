@@ -1,8 +1,9 @@
 use openssl::symm::Cipher;
+use ring::rand::{SystemRandom, SecureRandom};
 use url::Url;
 
 use super::hkdf::{derive_auth_key, derive_file_key, derive_meta_key};
-use super::{b64, rand_bytes};
+use super::b64;
 use crate::api::url::UrlBuilder;
 use crate::file::remote_file::RemoteFile;
 
@@ -68,8 +69,9 @@ impl KeySet {
         let mut iv = [0u8; 12];
 
         // Generate the secrets
-        rand_bytes(&mut secret).expect("failed to generate crypto secure random secret");
-        rand_bytes(&mut iv).expect("failed to generate crypto secure random input vector");
+        let rng = SystemRandom::new();
+        rng.fill(&mut secret).expect("failed to generate crypto secure random secret");
+        rng.fill(&mut iv).expect("failed to generate crypto secure random input vector");
 
         // Create the key
         let mut key = Self::new(secret, iv);

@@ -6,10 +6,11 @@ use std::io::{self, Read, Write};
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{Bytes, BytesMut};
 use openssl::symm;
+use ring::rand::{SystemRandom, SecureRandom};
 
 use super::{Crypt, CryptMode};
 use crate::config::{self, TAG_LEN};
-use crate::crypto::{hkdf::hkdf, rand_bytes};
+use crate::crypto::hkdf::hkdf;
 use crate::pipe::{prelude::*, DEFAULT_BUF_SIZE};
 
 /// The default record size in bytes to use for encryption.
@@ -712,7 +713,8 @@ fn unpad(block: &mut Vec<u8>, last: bool) {
 /// Generate a random salt for encryption.
 pub fn generate_salt() -> Vec<u8> {
     let mut salt = vec![0u8; SALT_LEN];
-    rand_bytes(&mut salt).expect("failed to generate encryption salt");
+    let rng = SystemRandom::new();
+    rng.fill(&mut salt).expect("failed to generate encryption salt");
     salt
 }
 
