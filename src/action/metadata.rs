@@ -90,8 +90,7 @@ impl<'a> Metadata<'a> {
         auth_nonce: &[u8],
     ) -> Result<MetadataResponse, MetaError> {
         // Compute the cryptographic signature for authentication
-        let sig = signature_encoded(key.auth_key().unwrap(), &auth_nonce)
-            .map_err(|_| MetaError::ComputeSignature)?;
+        let sig = signature_encoded(key.auth_key().unwrap(), &auth_nonce);
 
         // Build the request, fetch the encrypted metadata
         let mut response = client

@@ -161,8 +161,7 @@ impl<'a> Download<'a> {
         client: &Client,
     ) -> Result<(Response, u64), DownloadError> {
         // Compute the cryptographic signature
-        let sig = signature_encoded(key.auth_key().unwrap(), metadata.nonce())
-            .map_err(|_| DownloadError::ComputeSignature)?;
+        let sig = signature_encoded(key.auth_key().unwrap(), metadata.nonce());
 
         // Build and send the download request
         let response = client
