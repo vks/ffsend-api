@@ -1,5 +1,5 @@
 use failure::Error as FailureError;
-use openssl::symm::decrypt_aead;
+use ring::aead;
 use reqwest::header::AUTHORIZATION;
 use reqwest::Client;
 use serde::{
@@ -12,7 +12,6 @@ use super::exists::{Error as ExistsError, Exists as ExistsAction};
 use crate::api::nonce::{header_nonce, request_nonce, NonceError};
 use crate::api::request::{ensure_success, ResponseError};
 use crate::api::url::UrlBuilder;
-use crate::config::TAG_LEN;
 use crate::crypto::b64;
 use crate::crypto::key_set::KeySet;
 use crate::crypto::sig::signature_encoded;
@@ -153,24 +152,21 @@ impl RawMetadataResponse {
     /// If verification failed, an error is returned.
     pub fn decrypt_metadata(&self, key_set: &KeySet) -> Result<MetadataData, FailureError> {
         // Decode the metadata
-        let raw = b64::decode(self.meta())?;
+        let mut raw = b64::decode(self.meta())?;
 
-        // Get the encrypted metadata, and it's tag
-        let (encrypted, tag) = raw.split_at(raw.len() - TAG_LEN);
-        assert_eq!(tag.len(), TAG_LEN);
-
-        // Decrypt the metadata
-        let meta = decrypt_aead(
-            KeySet::cipher(),
-            key_set.meta_key().unwrap(),
-            Some(key_set.iv()),
-            &[],
-            encrypted,
-            &tag,
+        let key = aead::OpeningKey::new(KeySet::cipher(), key_set.meta_key().unwrap())?;
+        let nonce = aead::Nonce::try_assume_unique_for_key(key_set.nonce())?;
+        let decrypted = aead::open_in_place(
+            &key,
+            nonce,
+            aead::Aad::empty(),
+            0,
+            &mut raw
         )?;
 
+
         // Parse the metadata, and return
-        Ok(serde_json::from_slice(&meta)?)
+        Ok(serde_json::from_slice(&decrypted)?)
     }
 
     /// Get the encrypted metadata.

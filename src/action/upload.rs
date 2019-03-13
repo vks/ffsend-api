@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "send2")]
 use self::mime::APPLICATION_OCTET_STREAM;
 use mime_guess::{guess_mime_type, Mime};
-use openssl::symm::encrypt_aead;
+use ring::aead;
 #[cfg(feature = "send2")]
 use reqwest::header::AUTHORIZATION;
 #[cfg(feature = "send2")]
@@ -48,6 +48,7 @@ use crate::pipe::{
     prelude::*,
     progress::{ProgressPipe, ProgressReporter},
 };
+use crate::config::TAG_LEN;
 
 /// The protocol to report to the server when uploading through a websocket.
 #[cfg(feature = "send3")]
@@ -148,66 +149,79 @@ impl Upload {
 
     /// Create a blob of encrypted metadata, used in Firefox Send v2.
     #[cfg(feature = "send2")]
-    fn create_metadata(&self, key: &KeySet, file: &FileData) -> Result<Vec<u8>, MetaError> {
+    fn create_metadata(&self, key_set: &KeySet, file: &FileData) -> Result<Vec<u8>, MetaError> {
         // Determine what filename to use
         let name = self.name.clone().unwrap_or_else(|| file.name().to_owned());
 
         // Construct the metadata
-        let metadata = Metadata::from_send2(key.iv(), name, &file.mime())
+        let mut metadata = Metadata::from_send2(key_set.nonce(), name, &file.mime())
             .to_json()
             .into_bytes();
 
-        // Encrypt the metadata
-        let mut metadata_tag = vec![0u8; 16];
-        let mut metadata = match encrypt_aead(
-            KeySet::cipher(),
-            key.meta_key().unwrap(),
-            Some(&[0u8; 12]),
-            &[],
-            &metadata,
-            &mut metadata_tag,
-        ) {
-            Ok(metadata) => metadata,
-            Err(_) => return Err(MetaError::Encrypt),
-        };
+        // Allocate space for tag
+        metadata.reserve(TAG_LEN);
+        for _ in 0..TAG_LEN {
+            metadata.push(0);
+        }
 
-        // Append the encryption tag
-        metadata.append(&mut metadata_tag);
+        // Encrypt the metadata
+        let key = aead::SealingKey::new(KeySet::cipher(), key_set.meta_key().unwrap()).unwrap();
+        let nonce = aead::Nonce::try_assume_unique_for_key(key_set.nonce()).unwrap();
+        let encrypted = aead::seal_in_place(
+            &key,
+            nonce,
+            aead::Aad::empty(),
+            &mut metadata,
+            TAG_LEN,
+        );
+        match encrypted {
+            Ok(len) => if len != metadata.len() {
+                return Err(MetaError::Encrypt);
+            },
+            Err(_) => return Err(MetaError::Encrypt),
+        }
 
         Ok(metadata)
     }
 
     /// Create file info to send to the server, used for Firefox Send v3.
     #[cfg(feature = "send3")]
-    fn create_file_info(&self, key: &KeySet, file: &FileData) -> Result<String, MetaError> {
+    fn create_file_info(&self, key_set: &KeySet, file: &FileData) -> Result<String, MetaError> {
         // Determine what filename to use, build the metadata
         let name = self.name.clone().unwrap_or_else(|| file.name().to_owned());
 
         // Construct the metadata
         let mime = format!("{}", file.mime());
-        let metadata = Metadata::from_send3(name, mime, file.size())
+        let mut metadata = Metadata::from_send3(name, mime, file.size())
             .to_json()
             .into_bytes();
 
-        // Encrypt the metadata
-        let mut metadata_tag = vec![0u8; 16];
-        let mut metadata = match encrypt_aead(
-            KeySet::cipher(),
-            key.meta_key().unwrap(),
-            Some(&[0u8; 12]),
-            &[],
-            &metadata,
-            &mut metadata_tag,
-        ) {
-            Ok(metadata) => metadata,
-            Err(_) => return Err(MetaError::Encrypt),
-        };
+        // Allocate space for tag
+        metadata.reserve(TAG_LEN);
+        for _ in 0..TAG_LEN {
+            metadata.push(0);
+        }
 
-        // Append the encryption tag
-        metadata.append(&mut metadata_tag);
+        // Encrypt the metadata
+        let key = aead::SealingKey::new(KeySet::cipher(), key_set.meta_key().unwrap()).unwrap();
+        assert_eq!(TAG_LEN, key.algorithm().tag_len());
+        let nonce = aead::Nonce::assume_unique_for_key([0; 12]);
+        let encrypted = aead::seal_in_place(
+            &key,
+            nonce,
+            aead::Aad::empty(),
+            &mut metadata,
+            TAG_LEN,
+        );
+        match encrypted {
+            Ok(len) => if len != metadata.len() {
+                return Err(MetaError::Encrypt);
+            },
+            Err(_) => return Err(MetaError::Encrypt),
+        }
 
         // Build file info for this metadata and return it as JSON
-        Ok(FileInfo::from(None, None, b64::encode(&metadata), key).to_json())
+        Ok(FileInfo::from(None, None, b64::encode(&metadata), key_set).to_json())
     }
 
     /// Create a reader that reads the file as encrypted stream.
@@ -236,7 +250,7 @@ impl Upload {
         match self.version {
             #[cfg(feature = "send2")]
             Version::V2 => {
-                let encrypt = GcmCrypt::encrypt(len as usize, key.file_key().unwrap(), key.iv());
+                let encrypt = GcmCrypt::encrypt(len as usize, key.file_key().unwrap(), key.nonce());
                 let reader = encrypt.reader(Box::new(reader));
                 Ok(Reader::new(Box::new(reader)))
             }

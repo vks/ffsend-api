@@ -1,5 +1,6 @@
-use openssl::symm::Cipher;
 use ring::rand::{SystemRandom, SecureRandom};
+use ring::aead::NONCE_LEN;
+use ring::aead;
 use url::Url;
 
 use super::hkdf::{derive_auth_key, derive_file_key, derive_meta_key};
@@ -7,15 +8,12 @@ use super::b64;
 use crate::api::url::UrlBuilder;
 use crate::file::remote_file::RemoteFile;
 
-/// The length of an input vector.
-const KEY_IV_LEN: usize = 12;
-
 pub struct KeySet {
     /// A secret.
     secret: Vec<u8>,
 
     /// Input vector.
-    iv: [u8; KEY_IV_LEN],
+    nonce: [u8; NONCE_LEN],
 
     /// A derived file encryption key.
     file_key: Option<Vec<u8>>,
@@ -28,11 +26,11 @@ pub struct KeySet {
 }
 
 impl KeySet {
-    /// Construct a new key, with the given `secret` and `iv`.
-    pub fn new(secret: Vec<u8>, iv: [u8; 12]) -> Self {
+    /// Construct a new key, with the given `secret` and `nonce`.
+    pub fn new(secret: Vec<u8>, nonce: [u8; 12]) -> Self {
         Self {
             secret,
-            iv,
+            nonce,
             file_key: None,
             auth_key: None,
             meta_key: None,
@@ -66,15 +64,15 @@ impl KeySet {
     pub fn generate(derive: bool) -> Self {
         // Allocate two keys
         let mut secret = vec![0u8; 16];
-        let mut iv = [0u8; 12];
+        let mut nonce = [0u8; 12];
 
         // Generate the secrets
         let rng = SystemRandom::new();
         rng.fill(&mut secret).expect("failed to generate crypto secure random secret");
-        rng.fill(&mut iv).expect("failed to generate crypto secure random input vector");
+        rng.fill(&mut nonce).expect("failed to generate crypto secure random nonce");
 
         // Create the key
-        let mut key = Self::new(secret, iv);
+        let mut key = Self::new(secret, nonce);
 
         // Derive
         if derive {
@@ -108,14 +106,14 @@ impl KeySet {
         b64::encode(self.secret())
     }
 
-    /// Get the input vector.
-    pub fn iv(&self) -> &[u8] {
-        &self.iv
+    /// Get the nonce.
+    pub fn nonce(&self) -> &[u8] {
+        &self.nonce
     }
 
     /// Set the input vector.
-    pub fn set_iv(&mut self, iv: [u8; KEY_IV_LEN]) {
-        self.iv = iv;
+    pub fn set_nonce(&mut self, nonce: [u8; NONCE_LEN]) {
+        self.nonce = nonce;
     }
 
     /// Get the file encryption key, if derived.
@@ -140,7 +138,7 @@ impl KeySet {
     }
 
     /// Get the cipher type to use in combination with these keys.
-    pub fn cipher() -> Cipher {
-        Cipher::aes_128_gcm()
+    pub fn cipher() -> &'static aead::Algorithm {
+        &aead::AES_128_GCM
     }
 }
